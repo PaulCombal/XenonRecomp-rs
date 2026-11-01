@@ -6,6 +6,10 @@ add_executable(XenonRecomp
     "main.cpp" 
     "recompiler.cpp"
     "register_flow.cpp"
+    "rust_backend.cpp"
+    "rust_cfg.cpp"
+    "rust_output.cpp"
+    "rust_selftest.cpp"
     "test_recompiler.cpp" 
     "recompiler_config.cpp")
 

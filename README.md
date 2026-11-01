@@ -6,6 +6,8 @@ This project was heavily inspired by [N64: Recompiled](https://github.com/N64Rec
 
 **DISCLAIMER:** This project does not provide a runtime implementation. It only converts the game code to C++, which is not going to function correctly without a runtime backing it. **Making the game work is your responsibility.**
 
+The generated code can also be Rust instead of C++: see [the Rust backend](docs/rust-backend.md).
+
 ## Implementation Details
 
 ### Instructions

@@ -17,6 +17,8 @@ void RecompilerConfig::Load(const std::string_view& configFilePath)
         patchedFilePath = main["patched_file_path"].value_or<std::string>("");
         outDirectoryPath = main["out_directory_path"].value_or<std::string>("");
         switchTableFilePath = main["switch_table_file_path"].value_or<std::string>("");
+        backend = main["backend"].value_or<std::string>("cpp");
+        rustHooksFilePath = main["rust_hooks_file_path"].value_or<std::string>("");
 
         skipLr = main["skip_lr"].value_or(false);
         skipMsr = main["skip_msr"].value_or(false);

@@ -3,7 +3,7 @@
 #include "register_flow.h"
 #include <xex_patcher.h>
 
-static uint64_t ComputeMask(uint32_t mstart, uint32_t mstop)
+uint64_t ComputeMask(uint32_t mstart, uint32_t mstop)
 {
     mstart &= 0x3F;
     mstop &= 0x3F;
@@ -2774,10 +2774,8 @@ bool Recompiler::Recompile(const Function& fn)
     return allRecompiled;
 }
 
-void Recompiler::Recompile(const std::filesystem::path& headerFilePath)
+void Recompiler::WriteConfigHeader(const std::string_view& directory)
 {
-    out.reserve(10 * 1024 * 1024);
-
     {
         println("#pragma once");
 
@@ -2796,21 +2794,7 @@ void Recompiler::Recompile(const std::filesystem::path& headerFilePath)
         println("#define PPC_IMAGE_BASE 0x{:X}ull", image.base);
         println("#define PPC_IMAGE_SIZE 0x{:X}ull", image.size);
         
-        // Extract the address of the minimum code segment to store the function table at.
-        size_t codeMin = ~0;
-        size_t codeMax = 0;
-
-        for (auto& section : image.sections)
-        {
-            if ((section.flags & SectionFlags_Code) != 0)
-            {
-                if (section.base < codeMin)
-                    codeMin = section.base;
-
-                if ((section.base + section.size) > codeMax)
-                    codeMax = (section.base + section.size);
-            }
-        }
+        auto [codeMin, codeMax] = CodeRange();
 
         println("#define PPC_CODE_BASE 0x{:X}ull", codeMin);
         println("#define PPC_CODE_SIZE 0x{:X}ull", codeMax - codeMin);
@@ -2823,9 +2807,12 @@ void Recompiler::Recompile(const std::filesystem::path& headerFilePath)
 
         println("\n#endif");
 
-        SaveCurrentOutData("ppc_config.h");
+        SaveCurrentOutData(fmt::format("{}ppc_config.h", directory));
     }
+}
 
+void Recompiler::WriteContextHeader(const std::filesystem::path& headerFilePath, const std::string_view& directory)
+{
     {
         println("#pragma once");
 
@@ -2839,8 +2826,25 @@ void Recompiler::Recompile(const std::filesystem::path& headerFilePath)
             out += ss.str();
         }
 
-        SaveCurrentOutData("ppc_context.h");
+        SaveCurrentOutData(fmt::format("{}ppc_context.h", directory));
     }
+}
+
+void Recompiler::FindRegisterFlow()
+{
+    if (config.ctrAsLocalVariable || config.xerAsLocalVariable || config.reservedRegisterAsLocalVariable ||
+        config.crRegistersAsLocalVariables || config.nonArgumentRegistersAsLocalVariables || config.nonVolatileRegistersAsLocalVariables)
+    {
+        functionsKeepingRegistersInContext = FindFunctionsKeepingRegistersInContext(*this);
+    }
+}
+
+void Recompiler::Recompile(const std::filesystem::path& headerFilePath)
+{
+    out.reserve(10 * 1024 * 1024);
+
+    WriteConfigHeader();
+    WriteContextHeader(headerFilePath);
 
     {
         println("#pragma once\n");
@@ -2866,11 +2870,7 @@ void Recompiler::Recompile(const std::filesystem::path& headerFilePath)
         SaveCurrentOutData("ppc_func_mapping.cpp");
     }
 
-    if (config.ctrAsLocalVariable || config.xerAsLocalVariable || config.reservedRegisterAsLocalVariable ||
-        config.crRegistersAsLocalVariables || config.nonArgumentRegistersAsLocalVariables || config.nonVolatileRegistersAsLocalVariables)
-    {
-        functionsKeepingRegistersInContext = FindFunctionsKeepingRegistersInContext(*this);
-    }
+    FindRegisterFlow();
 
     for (size_t i = 0; i < functions.size(); i++)
     {
@@ -2887,6 +2887,27 @@ void Recompiler::Recompile(const std::filesystem::path& headerFilePath)
     }
 
     SaveCurrentOutData();
+}
+
+std::pair<size_t, size_t> Recompiler::CodeRange() const
+{
+    // Extract the address of the minimum code segment to store the function table at.
+    size_t codeMin = ~0;
+    size_t codeMax = 0;
+
+    for (auto& section : image.sections)
+    {
+        if ((section.flags & SectionFlags_Code) != 0)
+        {
+            if (section.base < codeMin)
+                codeMin = section.base;
+
+            if ((section.base + section.size) > codeMax)
+                codeMax = (section.base + section.size);
+        }
+    }
+
+    return { codeMin, codeMax };
 }
 
 void Recompiler::SaveCurrentOutData(const std::string_view& name)

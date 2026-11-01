@@ -738,7 +738,7 @@ inline T PPCDivide(T a, T b) noexcept
 // constant 1/50000 -- so the host supplies a counter at that rate rather than
 // its own cycle counter.
 #ifndef PPC_QUERY_TIMEBASE
-uint64_t PPC_QueryTimebase();
+extern "C" uint64_t PPC_QueryTimebase();
 #define PPC_QUERY_TIMEBASE() PPC_QueryTimebase()
 #endif
 

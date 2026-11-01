@@ -25,6 +25,8 @@ enum class CSRState
     VMX
 };
 
+uint64_t ComputeMask(uint32_t mstart, uint32_t mstop);
+
 struct Recompiler
 {
     // Enforce In-order Execution of I/O constant for quick comparison
@@ -70,6 +72,13 @@ struct Recompiler
     bool Recompile(const Function& fn);
 
     void Recompile(const std::filesystem::path& headerFilePath);
+
+    // The parts of Recompile above that every backend needs. A directory ends
+    // in a slash, and is relative to the output directory.
+    void WriteConfigHeader(const std::string_view& directory = std::string_view());
+    void WriteContextHeader(const std::filesystem::path& headerFilePath, const std::string_view& directory = std::string_view());
+    void FindRegisterFlow();
+    std::pair<size_t, size_t> CodeRange() const;
 
     void SaveCurrentOutData(const std::string_view& name = std::string_view());
 };

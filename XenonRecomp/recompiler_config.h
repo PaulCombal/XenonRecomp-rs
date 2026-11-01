@@ -30,6 +30,8 @@ struct RecompilerConfig
     std::string patchedFilePath;
     std::string outDirectoryPath;
     std::string switchTableFilePath;
+    std::string backend;
+    std::string rustHooksFilePath;
     std::unordered_map<uint32_t, RecompilerSwitchTable> switchTables;
     bool skipLr = false;
     bool ctrAsLocalVariable = false;

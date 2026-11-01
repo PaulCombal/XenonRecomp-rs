@@ -188,6 +188,13 @@ void RustRecompiler::WriteWorkspace(size_t chunkCount, const std::filesystem::pa
     println("rustflags = [\"-Ctarget-cpu=x86-64-v2\"]");
     SaveCurrentOutData(".cargo/config.toml");
 
+    // The compiler the output was tested with: rustc has miscompiled it before
+    // (docs/rust-backend.md). Run union_locals.rs before moving this.
+    println("[toolchain]");
+    println("channel = \"1.97.1\"");
+    println("targets = [\"x86_64-pc-windows-gnullvm\"]");
+    SaveCurrentOutData("rust-toolchain.toml");
+
     println("[package]");
     println("name = \"ppc_recomp\"");
     println("version = \"0.0.0\"");

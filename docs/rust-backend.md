@@ -12,14 +12,16 @@ the same `PPCContext` and the same calling convention.
 
 Both options can also be set in the TOML, as `backend = "rust"` and
 `rust_hooks_file_path`. `XenonUtils/rust/` must stay beside `ppc_context.h`, the
-generator reads the runtime crate from there. The output is x86-64 only, and was
-built and tested with Rust 1.97.
+generator reads the runtime crate from there. The output is x86-64 only, and
+`rust-toolchain.toml` pins it to Rust 1.97.1, the version it was tested with. Run
+`XenonTests/rust_backend/union_locals.rs` on any other before moving the pin
+(`rust_output.cpp`), because of [the rustc bug](#the-rustc-bug).
 
 ## What it writes
 
 | path | what |
 |---|---|
-| `Cargo.toml`, `.cargo/config.toml` | the workspace: `panic = "abort"`, `-Ctarget-cpu=x86-64-v2` |
+| `Cargo.toml`, `.cargo/config.toml`, `rust-toolchain.toml` | the workspace: `panic = "abort"`, `-Ctarget-cpu=x86-64-v2`, the compiler version |
 | `ppc_rt/` | the types and helpers, the counterpart of `ppc_context.h` (`XenonUtils/rust/ppc_rt.rs`), the title's constants and context (`context.rs`), and `hooks.rs` |
 | `chunks/cNNN/` | 256 functions each, a crate each |
 | `ppc_recomp/` | links the chunks as an rlib and a staticlib, and holds `PPCFuncMappings` |

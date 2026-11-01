@@ -12,7 +12,7 @@
 //   ppc_rt/                           the types and helpers (XenonUtils/rust/)
 //   chunks/cNNN/                      256 functions each, a crate each
 //   ppc_recomp/                       links them, and holds PPCFuncMappings
-//   cpp/                              the functions Rust cannot express, as C++
+//   cpp/                              any function with a mid-asm hook, as C++
 //
 // One crate per chunk because rustc scales worse than linearly with crate size,
 // and because chunks build in parallel. They call each other by symbol, so there
@@ -31,8 +31,9 @@ struct RustRecompiler : Recompiler
 
     void Recompile(const std::filesystem::path& headerFilePath);
 
-    // True for a function that has to go through the C++ backend: one that calls
-    // setjmp or longjmp, or has a mid-asm hook.
+    // True for a function that has to go through the C++ backend: one with a
+    // mid-asm hook, or a setjmp that is not a plain call in a function that keeps
+    // its registers in the context, which no compiled title has.
     bool NeedsCppFallback(const Function& fn) const;
 
     // One function's Rust, added to `externs` with the symbols it calls.
@@ -50,6 +51,10 @@ struct RustRecompiler : Recompiler
 
 private:
     enum class Flow : uint8_t { None, Jump, Cond, Switch, Return };
+
+    // The addresses execution continues at after each setjmp of the function
+    // being recompiled.
+    std::vector<uint32_t> setjmpResumes;
 
     struct PendingFlow
     {

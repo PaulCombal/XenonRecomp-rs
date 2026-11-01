@@ -36,9 +36,9 @@ SSSE3 and SSE4.1 every vector instruction would be a function call), and
 
 ## Using it from a runtime
 
-From Rust, depend on `ppc_recomp`. Its `build.rs` compiles `cpp/ppc_fallback.cpp`
-with `clang++` (`CXX`, `AR`, `PPC_SIMDE_INCLUDE`). A runtime that compiles that
-file itself sets `PPC_SKIP_CPP_FALLBACK`.
+From Rust, depend on `ppc_recomp`. If `cpp/ppc_fallback.cpp` has any functions, its
+`build.rs` compiles them with `clang++` (`CXX`, `AR`, `PPC_SIMDE_INCLUDE`). A runtime
+that compiles that file itself sets `PPC_SKIP_CPP_FALLBACK`.
 
 From C++, link `libppc_recomp.a` in place of the compiled `ppc_recomp.*.cpp` and
 `ppc_func_mapping.cpp`, and nothing else changes. Everything is `extern "C"` and
@@ -54,7 +54,8 @@ can still call `__imp__sub_X`. Rust has no stable weak linkage, but its assemble
 does: each chunk has a `global_asm!` of `.weak` and `.set` lines.
 
 A hook written in Rust must not panic across guest frames, and may be skipped by a
-`longjmp`, so nothing in it can rely on a destructor while it calls guest code.
+`longjmp`, so nothing in it can rely on a destructor while it calls guest code. That
+means no `Vec`, `Box` or lock guard held across a call into the guest.
 
 ### What C++ does with macros
 
@@ -73,24 +74,39 @@ Rust has no goto. `rust_cfg.cpp` rebuilds each function from its basic blocks:
 - A loop with several entries has no header to start a `loop` at. It gets a
   dispatcher, a `match` on a `__state` local that the edges into the loop set, and
   the rest of the function stays as it is. This is what LLVM's FixIrreducible does.
-  MW2 has 8 such regions in the campaign, on 44 edges.
+  MW2 has 12 such regions in the campaign, on 84 edges, counting the ones setjmp makes.
 
 There is no case this leaves over, and no assembly is involved: `asm!` could not
 help anyway, since there is no x86 to wrap, and its jumps cannot reach between
 Rust blocks.
 
+## setjmp and longjmp
+
+A function that calls `setjmp` returns twice, a thing rustc cannot be told, and a
+Rust function that does it anyway is miscompiled. So in the Rust output nothing
+returns twice. 12 functions of the MW2 campaign call it, one of them 9,018 lines,
+and 5 more only call `longjmp`.
+
+The generator cuts such a function into a body that can start after any of its
+`setjmp`s, by the same dispatcher as a multi-entry loop. At a `setjmp` the body
+saves the context in `env`, as the C++ does, and returns. A small assembly
+trampoline in `ppc_rt`, `ppc_setjmp_call`, saves the callee-saved registers on the
+stack, leaves its stack pointer in the guest's `jmp_buf`, and calls the body at the
+point after that `setjmp`. `ppc_longjmp` puts the stack pointer back and makes the
+same call with the value, the body first getting `env` back. To the compiler those
+are two ordinary calls. It is also why only 8 bytes of a `jmp_buf` are used.
+
+These functions keep all their registers in the context (`register_flow.cpp`),
+so nothing they need lives in a frame that went away. `longjmp` drops frames, which
+is defined as long as they have no destructors: generated code has none, all its
+locals being `Copy`, and the release profile has no landing pads.
+
 ## What goes through C++
 
-`cpp/ppc_fallback.cpp` is the C++ backend's output for what Rust cannot express:
-
-- Functions that call `setjmp` or `longjmp`: a function that calls `setjmp` must
-  be compiled knowing it can return twice, and rustc has no way to say so. 17
-  functions in the MW2 campaign, one of them 9,018 lines.
-- Functions with a mid-asm hook, which no title here uses.
-
-`longjmp` passes over Rust frames on its way, which is defined as long as they have
-no destructors to skip: generated code has none, all its locals being `Copy`, and
-the release profile has no landing pads.
+`cpp/ppc_fallback.cpp` is the C++ backend's output for a function with a mid-asm
+hook, or a `setjmp` reached other than by a plain `bl` or in a function that keeps
+registers in locals. MW2 has none: the file is empty, and neither title needs a C++
+compiler for guest code.
 
 ## What is different from the C++ output
 
@@ -102,6 +118,11 @@ input a real guest does not produce. The C++ result is the one that is off:
 - `lwz r3,-4(0)` is below `base` in C++, near the top of the 4 GB in Rust.
 - `vpkd3d128` overflows a signed int in C++, undefined, far from the 3.0 its input
   normally is. Rust wraps.
+
+C++ restores the context after a `longjmp` with `ctx = env`, which is a copy of
+`ctx` to itself as far as `__restrict` is concerned, and clang can delete it. It did
+in the test programs of `run.sh`, which build with `-D__restrict=` for that reason.
+It did not in the MW2 function checked, `sub_82283C10`; the others were not.
 
 A branch that decrements the counter and leaves the function (`bdz` to a tail call)
 does not compile in C++ and does in Rust.
@@ -152,7 +173,8 @@ uses, and says when the named constant stops being miscompiled.
   crates alone builds, and changes little: calls go through weak symbols, which
   stops inlining across functions. PGO has not been tried on the guest code.
 - Windows is `x86_64-pc-windows-gnullvm`, linked with llvm-mingw. A chunk compiles
-  for it, and weak hooks work there (run under Wine); no whole game has been built.
+  for it, and weak hooks and the setjmp trampoline work there (run under Wine); no
+  whole game has been built.
 
 ## Testing
 
@@ -163,7 +185,8 @@ uses, and says when the named constant stops being miscompiled.
   with every form of every handled instruction with random operands, and random
   control flow graphs with jump tables and multi-entry loops, and the two programs
   run on hostile inputs (NaNs, denormals, every rounding and flush mode, stores that
-  fault). `coverage.py` lists any case of `rust_backend.cpp` that was not reached.
+  fault), and `setjmp` programs: there and back, from a callee, around a loop, with
+  two buffers. `coverage.py` lists any case of `rust_backend.cpp` that was not reached.
   Atomics run on one thread here: what they do under contention is the game's test.
 - `title_fuzz.py`: every function of a real title, one chunk at a time, in the
   configuration it really has. Registers in locals is what `run.sh` cannot see, as

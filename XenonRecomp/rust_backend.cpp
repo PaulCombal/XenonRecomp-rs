@@ -17,6 +17,7 @@
 bool RustRecompiler::NeedsCppFallback(const Function& fn) const
 {
     const auto* data = static_cast<const uint32_t*>(image.Find(fn.base));
+    bool callsSetjmp = false;
 
     for (size_t address = fn.base; address < fn.base + fn.size; address += 4)
     {
@@ -31,8 +32,20 @@ bool RustRecompiler::NeedsCppFallback(const Function& fn) const
         else if (op == PPC_OP_BC)
             target = address + PPC_BD(instruction);
 
-        if (target != 0 && (target == config.setJmpAddress || target == config.longJmpAddress))
-            return true;
+        if (target != 0 && target == config.setJmpAddress)
+        {
+            // Only a plain bl has somewhere to continue.
+            if (op != PPC_OP_B || !PPC_BL(instruction))
+                return true;
+            callsSetjmp = true;
+        }
+    }
+
+    if (callsSetjmp)
+    {
+        const bool anyLocals = config.ctrAsLocalVariable || config.xerAsLocalVariable || config.reservedRegisterAsLocalVariable ||
+            config.crRegistersAsLocalVariables || config.nonArgumentRegistersAsLocalVariables || config.nonVolatileRegistersAsLocalVariables;
+        return anyLocals && functionsKeepingRegistersInContext.count(fn.base) == 0;
     }
 
     return false;
@@ -189,7 +202,21 @@ bool RustRecompiler::Emit(
 
     auto printFunctionCall = [&](uint32_t address)
         {
-            // setjmp and longjmp never get here: NeedsCppFallback.
+            if (address == config.longJmpAddress)
+            {
+                println("\tppc_longjmp(base.add({}.u32 as usize), {}.s32);", r(3), r(4));
+                return;
+            }
+
+            if (address == config.setJmpAddress)
+            {
+                // The body stops here, and something calls it again to go on.
+                setjmpResumes.push_back(base + 4);
+                println("\tppc_setjmp_site(ctx, __frame, {});", setjmpResumes.size());
+                flow.kind = Flow::Return;
+                return;
+            }
+
             auto targetSymbol = image.symbols.find(address);
 
             if (targetSymbol != image.symbols.end() && targetSymbol->address == address && targetSymbol->type == Symbol_Function)
@@ -2090,6 +2117,7 @@ std::string RustRecompiler::RecompileFunction(const Function& fn, std::set<std::
     auto switchTable = config.switchTables.end();
     CSRState csrState = CSRState::Unknown;
     RecompilerLocalVariables localVariables;
+    setjmpResumes.clear();
 
     // Each block's flow is in guest addresses until every block exists.
     constexpr uint32_t FALL_OFF_THE_END = 0;
@@ -2202,6 +2230,33 @@ std::string RustRecompiler::RecompileFunction(const Function& fn, std::set<std::
         }
     }
 
+    // A body that can start after any of its setjmps: one more multi-entry graph.
+    const bool hasSetjmp = !setjmpResumes.empty();
+    if (hasSetjmp)
+    {
+        for (auto& block : blocks)
+        {
+            for (int& successor : block.succ)
+            {
+                if (successor != rustcfg::RETURN)
+                    successor++;
+            }
+        }
+
+        rustcfg::Block start;
+        start.id = uint32_t(fn.base + fn.size + 4);
+        start.term = rustcfg::Term::Switch;
+        start.cond = "(*__frame).resume";
+        start.values.push_back(0);
+        start.succ.push_back(1);
+        for (size_t i = 0; i < setjmpResumes.size(); i++)
+        {
+            start.values.push_back(uint32_t(i + 1));
+            start.succ.push_back(blockIndex(setjmpResumes[i]) + 1);
+        }
+        blocks.insert(blocks.begin(), std::move(start));
+    }
+
     rustcfg::Stats stats;
     std::string body = rustcfg::Structure(std::move(blocks), &stats);
 
@@ -2211,6 +2266,13 @@ std::string RustRecompiler::RecompileFunction(const Function& fn, std::set<std::
 
     println("#[unsafe(no_mangle)]");
     println("pub unsafe extern \"C\" fn __imp__{}(ctx: &mut PPCContext, base: *mut u8) {{", name);
+
+    if (hasSetjmp)
+    {
+        println("\tppc_run_setjmp_function(ctx, base, __body_{});", name);
+        println("}}\n");
+        println("unsafe extern \"C\" fn __body_{}(ctx: &mut PPCContext, base: *mut u8, __frame: *mut SetjmpFrame) {{", name);
+    }
 
     if (localVariables.ctr)
         println("\tlet mut ctr = PPCRegister {{ u64: 0 }};");

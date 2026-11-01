@@ -1,4 +1,4 @@
-// Compiles the functions Rust cannot express, cpp/ppc_fallback.cpp, into this
+// Compiles the functions left to C++, cpp/ppc_fallback.cpp, into this
 // crate. A project that builds that file itself, for its own flags or headers,
 // sets PPC_SKIP_CPP_FALLBACK. CXX and AR name the tools; PPC_SIMDE_INCLUDE
 // overrides where simde is, which is where the generator found it.
@@ -20,6 +20,12 @@ fn main() {
     println!("cargo:rerun-if-changed=../cpp/ppc_fallback.cpp");
 
     if env::var_os("PPC_SKIP_CPP_FALLBACK").is_some() {
+        return;
+    }
+
+    // Nearly always: only a mid-asm hook puts a function there.
+    let source = std::fs::read_to_string("../cpp/ppc_fallback.cpp").unwrap();
+    if !source.contains("PPC_FUNC_IMPL") {
         return;
     }
 

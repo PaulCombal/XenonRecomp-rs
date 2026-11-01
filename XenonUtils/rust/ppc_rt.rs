@@ -233,6 +233,153 @@ pub unsafe fn ppc_debugtrap() {
     asm!("int3", options(nomem, nostack));
 }
 
+// ---- setjmp and longjmp ------------------------------------------------------
+//
+// A function that calls setjmp returns twice, which rustc cannot be told, and a
+// Rust function that does so anyway is miscompiled. So nothing here returns twice.
+// The generator cuts such a function at each setjmp into a body that can start at
+// any of them, the way a multi-entry loop is handled, and ppc_setjmp_call calls
+// that body. It leaves its stack pointer in the guest's jmp_buf, and ppc_longjmp
+// goes back to it and makes the call again, with the value. To the compiler those
+// are two ordinary calls of a function. The frames longjmp drops have no
+// destructors, as ever. All of the guest's registers are in the context in these
+// functions (register_flow.cpp), and env holds them as they were, as in C++.
+
+#[repr(C)]
+pub struct SetjmpFrame {
+    ctx: *mut PPCContext,
+    base: *mut u8,
+    env: *mut PPCContext,
+    body: unsafe extern "C" fn(&mut PPCContext, *mut u8, *mut SetjmpFrame),
+    pub resume: u32, // where the body starts: 0, or the setjmp it continues after
+    site: u32,       // the setjmp the body just stopped at, 0 when it finished
+    buffer: u32,     // that setjmp's jmp_buf
+}
+
+// One setjmp in force, which outlives the calls of Resume it makes.
+#[repr(C)]
+struct SetjmpActivation {
+    frame: *mut SetjmpFrame,
+    site: u32,
+    buffer: u32,
+}
+
+unsafe extern "C" {
+    fn ppc_setjmp_call(buffer: *mut u8, function: unsafe extern "C" fn(*mut SetjmpActivation, i32), argument: *mut SetjmpActivation);
+    pub fn ppc_longjmp(buffer: *mut u8, value: i32) -> !;
+}
+
+#[cfg(not(windows))]
+core::arch::global_asm!(
+    ".text",
+    ".globl ppc_setjmp_call",
+    "ppc_setjmp_call:",
+    "push rbp", "push rbx", "push r12", "push r13", "push r14", "push r15",
+    "push rdx", // [rsp+16] the argument
+    "push rsi", // [rsp+8] the function
+    "sub rsp, 8",
+    "mov [rdi], rsp",
+    "mov rdi, rdx",
+    "xor esi, esi",
+    "call [rsp+8]",
+    "2:",
+    "add rsp, 24",
+    "pop r15", "pop r14", "pop r13", "pop r12", "pop rbx", "pop rbp",
+    "ret",
+    ".globl ppc_longjmp",
+    "ppc_longjmp:",
+    "mov rsp, [rdi]",
+    "mov eax, 1",
+    "test esi, esi",
+    "cmove esi, eax", // longjmp(buffer, 0) returns 1
+    "mov rdi, [rsp+16]",
+    "call [rsp+8]",
+    "jmp 2b",
+);
+
+#[cfg(windows)]
+core::arch::global_asm!(
+    ".text",
+    ".globl ppc_setjmp_call",
+    "ppc_setjmp_call:",
+    "push rbp", "push rbx", "push rdi", "push rsi", "push r12", "push r13", "push r14", "push r15",
+    "push r8",  // [rsp+208] the argument
+    "push rdx", // [rsp+200] the function
+    "sub rsp, 200", // the shadow space, xmm6-15, and alignment
+    "movups [rsp+32], xmm6", "movups [rsp+48], xmm7", "movups [rsp+64], xmm8", "movups [rsp+80], xmm9",
+    "movups [rsp+96], xmm10", "movups [rsp+112], xmm11", "movups [rsp+128], xmm12", "movups [rsp+144], xmm13",
+    "movups [rsp+160], xmm14", "movups [rsp+176], xmm15",
+    "mov [rcx], rsp",
+    "mov rcx, r8",
+    "xor edx, edx",
+    "call [rsp+200]",
+    "2:",
+    "movups xmm6, [rsp+32]", "movups xmm7, [rsp+48]", "movups xmm8, [rsp+64]", "movups xmm9, [rsp+80]",
+    "movups xmm10, [rsp+96]", "movups xmm11, [rsp+112]", "movups xmm12, [rsp+128]", "movups xmm13, [rsp+144]",
+    "movups xmm14, [rsp+160]", "movups xmm15, [rsp+176]",
+    "add rsp, 216",
+    "pop r15", "pop r14", "pop r13", "pop r12", "pop rsi", "pop rdi", "pop rbx", "pop rbp",
+    "ret",
+    ".globl ppc_longjmp",
+    "ppc_longjmp:",
+    "mov rsp, [rcx]",
+    "mov eax, 1",
+    "test edx, edx",
+    "cmove edx, eax",
+    "mov rcx, [rsp+208]",
+    "call [rsp+200]",
+    "jmp 2b",
+);
+
+/// `*env = *ctx`, then stops the body at this setjmp. The body returns next.
+#[inline(always)]
+pub unsafe fn ppc_setjmp_site(ctx: &mut PPCContext, frame: *mut SetjmpFrame, site: u32) {
+    core::ptr::copy_nonoverlapping(ctx as *const PPCContext, (*frame).env, 1);
+    (*frame).site = site;
+    (*frame).buffer = ctx.r3.u32;
+}
+
+unsafe extern "C" fn setjmp_resume(activation: *mut SetjmpActivation, value: i32) {
+    let frame = (*activation).frame;
+    if value != 0 {
+        core::ptr::copy_nonoverlapping((*frame).env, (*frame).ctx, 1);
+    }
+    (*(*frame).ctx).r3.s64 = value as i64;
+
+    (*frame).resume = (*activation).site;
+    (*frame).site = 0;
+    ((*frame).body)(&mut *(*frame).ctx, (*frame).base, frame);
+
+    // A setjmp on another buffer goes inside this one, which stays in force. On
+    // the same buffer it replaces this one, which therefore ends here: the stack
+    // does not grow with each turn of a loop around setjmp.
+    while (*frame).site != 0 && (*frame).buffer != (*activation).buffer {
+        setjmp_call(frame);
+    }
+}
+
+unsafe fn setjmp_call(frame: *mut SetjmpFrame) {
+    let mut activation = SetjmpActivation { frame, site: (*frame).site, buffer: (*frame).buffer };
+    (*frame).site = 0;
+    ppc_setjmp_call((*frame).base.add(activation.buffer as usize), setjmp_resume, &raw mut activation);
+}
+
+/// The whole of a function that calls setjmp.
+#[inline(never)]
+pub unsafe fn ppc_run_setjmp_function(
+    ctx: &mut PPCContext,
+    base: *mut u8,
+    body: unsafe extern "C" fn(&mut PPCContext, *mut u8, *mut SetjmpFrame),
+) {
+    let mut env = core::mem::MaybeUninit::<PPCContext>::uninit();
+    let mut frame = SetjmpFrame { ctx: ctx as *mut PPCContext, base, env: env.as_mut_ptr(), body, resume: 0, site: 0, buffer: 0 };
+    let frame = &raw mut frame;
+    body(&mut *(*frame).ctx, base, frame);
+    while (*frame).site != 0 {
+        setjmp_call(frame);
+    }
+}
+
 // ---- guest memory ------------------------------------------------------------
 //
 // Volatile, as in ppc_context.h, and for the same reason: other guest threads

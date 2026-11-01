@@ -251,8 +251,7 @@ void RustRecompiler::WriteCppFallback(const std::string& code, const std::filesy
 
     // A title that keeps its own ppc_recomp_shared.h, for its own
     // PPC_CALL_INDIRECT_FUNC, builds this file against that one.
-    println("// The functions the Rust backend leaves to C++: those that call setjmp or");
-    println("// longjmp, which a Rust function cannot do, and those with a mid-asm hook.\n");
+    println("// The functions the Rust backend leaves to C++: those with a mid-asm hook.\n");
     println("#include <cstddef>");
     println("#include \"ppc_recomp_shared.h\"\n");
     println("static_assert(sizeof(PPCContext) == {});", layout.size);

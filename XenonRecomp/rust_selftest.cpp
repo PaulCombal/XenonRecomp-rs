@@ -31,7 +31,7 @@ namespace
     // what Rust does better and a comparison would only report as a difference:
     // C++ adds `base + rA + rB` for the atomics, which does not wrap at 4 GB, and
     // overflows a signed int (undefined) packing a vector far from 3.0f.
-    enum CaseClass { CASE_PLAIN = 0, CASE_INDIRECT = 1, CASE_GRAPH = 2, CASE_TAME = 3 };
+    enum CaseClass { CASE_PLAIN = 0, CASE_INDIRECT = 1, CASE_GRAPH = 2, CASE_TAME = 3, CASE_JUMP = 4 };
 
     struct Case
     {
@@ -171,11 +171,13 @@ void RustRecompiler::WriteSelfTest(const std::filesystem::path& directory, const
         }
     }
 
-    // What random operands rarely reach: mr is or with both sources the same.
+    // What random operands rarely reach: mr and not are or and nor with both
+    // sources the same.
     for (size_t i = 0; i < perOpcode; i++)
     {
         const uint32_t rS = random() % 32, rA = random() % 32;
         addCase({ 0x7C000378 | (rS << 21) | (rA << 16) | (rS << 11) | uint32_t(i & 1), NOP, 0x3BFF0001, BLR }, CASE_PLAIN, "mr");
+        addCase({ 0x7C0000F8 | (rS << 21) | (rA << 16) | (rS << 11) | uint32_t(i & 1), NOP, 0x3BFF0001, BLR }, CASE_PLAIN, "not");
     }
     // A reservation that can hold: rD = (rA), then a store of rS to the same place.
     for (size_t i = 0; i < perOpcode; i++)
@@ -183,6 +185,55 @@ void RustRecompiler::WriteSelfTest(const std::filesystem::path& directory, const
         const uint32_t rD = 3 + random() % 8, rS = 3 + random() % 8, rA = 3 + random() % 8;
         addCase({ 0x7C000028 | (rD << 21) | (rA << 11), 0x7C00012D | (rS << 21) | (rA << 11), NOP, BLR }, CASE_TAME, "lwarx + stwcx.");
         addCase({ 0x7C0000A8 | (rD << 21) | (rA << 11), 0x7C0001AD | (rS << 21) | (rA << 11), NOP, BLR }, CASE_TAME, "ldarx + stdcx.");
+    }
+
+    // setjmp and longjmp, with r3 a jmp_buf: the plain way there and back, from a
+    // function further down, around a loop, and with two buffers in force.
+    {
+        const auto mr = [](uint32_t a, uint32_t s) { return 0x7C000378 | (s << 21) | (a << 16) | (s << 11); };
+        const auto li = [](uint32_t d, uint32_t v) { return 0x38000000 | (d << 21) | v; };
+        const auto bl = [](uint32_t from, uint32_t to) { return 0x48000001 | ((to - from) & 0x03FFFFFC); };
+        const uint32_t ADD_R30 = 0x3BDE0001;  // addi r30,r30,1
+        const uint32_t CMP_R3 = 0x2F030000;   // cmpwi cr6,r3,0
+        const auto bne = [](uint32_t from, uint32_t to) { return 0x409A0000 | ((to - from) & 0xFFFC); };
+
+        builder.Align();
+        const uint32_t setjmpStub = builder.Here();
+        builder.Add({ BLR });
+        const uint32_t longjmpStub = builder.Here();
+        builder.Add({ BLR });
+        config.setJmpAddress = setjmpStub;
+        config.longJmpAddress = longjmpStub;
+
+        for (uint32_t value : { 0u, 1u, 7u, 0x7FFFu })
+        {
+            builder.Align();
+            uint32_t a = builder.Here();
+            auto at = [&](uint32_t i) { return a + i * 4; };
+            addCase({ mr(31, 3), li(29, 0x11), bl(at(2), setjmpStub), ADD_R30, CMP_R3, bne(at(5), at(10)),
+                li(29, 0x22), mr(3, 31), li(4, value), bl(at(9), longjmpStub), mr(28, 3), BLR }, CASE_JUMP, "setjmp, longjmp");
+
+            builder.Align();
+            const uint32_t helper = builder.Here();
+            builder.Add({ mr(3, 31), li(4, value), bl(helper + 8, longjmpStub), BLR });
+            builder.Align();
+            a = builder.Here();
+            addCase({ mr(31, 3), bl(at(1), setjmpStub), ADD_R30, CMP_R3, bne(at(4), at(7)), li(29, 0x22),
+                bl(at(6), helper), mr(28, 3), BLR }, CASE_JUMP, "longjmp from a callee");
+
+            builder.Align();
+            a = builder.Here();
+            addCase({ mr(31, 3), li(27, 3), mr(3, 31), bl(at(3), setjmpStub), CMP_R3, bne(at(5), at(12)),
+                0x3B7BFFFF, 0x2F9B0000, 0x409E0000 | ((at(2) - at(8)) & 0xFFFC), // r27--, around while r27 != 0
+                mr(3, 31), li(4, value), bl(at(11), longjmpStub), mr(28, 3), BLR }, CASE_JUMP, "setjmp in a loop");
+
+            builder.Align();
+            a = builder.Here();
+            addCase({ mr(31, 3), 0x3B430200, bl(at(2), setjmpStub), CMP_R3, bne(at(4), at(13)), // r26 = r3 + 512
+                mr(3, 26), bl(at(6), setjmpStub), ADD_R30, CMP_R3, bne(at(9), at(14)),
+                mr(3, 26), li(4, value), bl(at(12), longjmpStub),
+                BLR, mr(3, 31), li(4, 9), bl(at(16), longjmpStub), BLR }, CASE_JUMP, "two buffers");
+        }
     }
 
     // The graphs. A slot is seven instructions; see the words below.

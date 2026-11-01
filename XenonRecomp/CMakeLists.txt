@@ -5,6 +5,7 @@ project("XenonRecomp")
 add_executable(XenonRecomp 
     "main.cpp" 
     "recompiler.cpp"
+    "register_flow.cpp"
     "test_recompiler.cpp" 
     "recompiler_config.cpp")
 

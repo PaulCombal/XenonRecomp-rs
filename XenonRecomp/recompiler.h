@@ -34,6 +34,11 @@ struct Recompiler
     std::string out;
     size_t cppFileIndex = 0;
     RecompilerConfig config;
+    // The functions that keep every register in the context whatever the
+    // *_as_local options say (register_flow.cpp), and whether the function
+    // being recompiled is one of them.
+    std::unordered_set<size_t> functionsKeepingRegistersInContext;
+    bool keepRegistersInContext = false;
 
     bool LoadConfig(const std::string_view& configFilePath);
 

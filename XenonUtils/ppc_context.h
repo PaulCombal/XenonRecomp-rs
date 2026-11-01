@@ -11,6 +11,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
+#include <type_traits>
 
 #include <x86/avx.h>
 #include <x86/sse.h>
@@ -682,6 +684,22 @@ inline simde__m128i simde_mm_vctsxs(simde__m128 src1)
     return simde_mm_andnot_si128(simde_mm_castps_si128(xmm2), simde_mm_castps_si128(dest));
 }
 
+inline simde__m128i simde_mm_vctuxs(simde__m128 src1)
+{
+    // Convert float -> unsigned word with saturation, NaN -> 0.
+    simde__m128 ord = simde_mm_cmpord_ps(src1, src1);
+    simde__m128 x = simde_mm_and_ps(src1, ord);
+    x = simde_mm_max_ps(x, simde_mm_set1_ps(0.0f));
+    x = simde_mm_min_ps(x, simde_mm_set1_ps(4294967040.0f)); // largest float <= UINT32_MAX
+    // cvttps_epi32 is signed, so split at 2^31 and re-add the bias afterwards.
+    simde__m128 bias = simde_mm_set1_ps(2147483648.0f);
+    simde__m128 hiMask = simde_mm_cmpge_ps(x, bias);
+    simde__m128i lo = simde_mm_cvttps_epi32(simde_mm_andnot_ps(hiMask, x));
+    simde__m128i hi = simde_mm_cvttps_epi32(simde_mm_and_ps(hiMask, simde_mm_sub_ps(x, bias)));
+    hi = simde_mm_add_epi32(hi, simde_mm_and_si128(simde_mm_castps_si128(hiMask), simde_mm_set1_epi32(INT_MIN)));
+    return simde_mm_or_si128(lo, hi);
+}
+
 inline simde__m128i simde_mm_vsr(simde__m128i a, simde__m128i b)
 {
     b = simde_mm_srli_epi64(simde_mm_slli_epi64(b, 61), 61);
@@ -698,6 +716,30 @@ inline uint64_t __rdtsc()
 }
 #elif !defined(__x86_64__) && !defined(_M_X64)
 #   error "Missing implementation for __rdtsc()"
+#endif
+
+// PowerPC's divide does not trap: a zero divisor, or the one signed quotient
+// that overflows (most negative / -1), leaves the result undefined and the
+// program goes on. The host's divide traps on both, so a value a peer sends
+// as a divisor would end the process. These give 0, as Xenia does. The trap
+// the title's compiler puts beside a divide (twllei rX,0) is not emitted,
+// also as in Xenia.
+template<typename T>
+inline T PPCDivide(T a, T b) noexcept
+{
+    if (b == 0) return 0;
+    if constexpr (std::is_signed_v<T>)
+        if (b == -1 && a == std::numeric_limits<T>::min()) return 0;
+    return a / b;
+}
+
+// What mftb reads. The console's timebase runs at 50 MHz and titles assume it
+// without asking -- MW2's server thread turns ticks into milliseconds with a
+// constant 1/50000 -- so the host supplies a counter at that rate rather than
+// its own cycle counter.
+#ifndef PPC_QUERY_TIMEBASE
+uint64_t PPC_QueryTimebase();
+#define PPC_QUERY_TIMEBASE() PPC_QueryTimebase()
 #endif
 
 #endif

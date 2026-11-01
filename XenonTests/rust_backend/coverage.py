@@ -7,7 +7,7 @@ source, cases_path = sys.argv[1:3]
 ids = set(re.findall(r'case PPC_INST_(\w+):', open(source).read()))
 seen = set()
 for line in open(cases_path):
-    name = re.match(r'\{ 0x[0-9A-F]+, \d, "(\S+)', line).group(1)
+    name = re.match(r'\{ 0x[0-9A-F]+, \d, "([^\s"]+)', line).group(1)
     seen.add(name.rstrip('.').upper())
 # Labels that share their code with the plain form the disassembler does produce.
 shared = {'VUPKHSH128': 'VUPKHSH', 'VUPKLSH128': 'VUPKLSH'}

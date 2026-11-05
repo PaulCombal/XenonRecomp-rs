@@ -29,6 +29,10 @@ struct RecompilerConfig
     std::string patchFilePath;
     std::string patchedFilePath;
     std::string outDirectoryPath;
+    // The Rust backend's number of chunk crates, 0 for as many as the functions
+    // need: titles that share a Cargo.lock give the largest of theirs, the
+    // crates past the last function left empty.
+    size_t rustChunkCount = 0;
     std::string switchTableFilePath;
     std::string backend;
     std::string rustHooksFilePath;

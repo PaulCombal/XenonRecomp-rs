@@ -31,6 +31,12 @@ One crate per chunk, because rustc scales worse than linearly with the size of a
 crate, and chunks then build in parallel. They reach each other by symbol, so
 there is no dependency cycle. A whole title takes about 30 seconds on 16 threads.
 
+`rust_chunk_count` in `[main]` sets the number of chunk crates, the ones past the
+last function left empty. A project that keeps one `Cargo.lock` for several
+titles gives each the largest count among them: the lock lists every crate, and
+it is then the same whichever title is generated. Fewer than the functions need
+is an error.
+
 If your own workspace builds these crates, it has to set the same two things: the
 target CPU (`ppc_rt` stops the build with a message otherwise, because without
 SSSE3 and SSE4.1 every vector instruction would be a function call), and

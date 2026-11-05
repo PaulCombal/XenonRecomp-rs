@@ -273,7 +273,10 @@ void RustRecompiler::Recompile(const std::filesystem::path& headerFilePath)
     out.reserve(10 * 1024 * 1024);
 
     const auto root = std::filesystem::path(config.directoryPath) / config.outDirectoryPath;
-    const size_t chunkCount = (functions.size() + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    const size_t neededChunks = (functions.size() + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    if (config.rustChunkCount != 0 && config.rustChunkCount < neededChunks)
+        throw std::runtime_error(fmt::format("rust_chunk_count is {}, the functions need {} chunks", config.rustChunkCount, neededChunks));
+    const size_t chunkCount = std::max(neededChunks, config.rustChunkCount);
 
     for (const char* directory : { ".cargo", "ppc_rt/src", "ppc_recomp/src", "cpp/include" })
         std::filesystem::create_directories(root / directory);
@@ -319,6 +322,10 @@ void RustRecompiler::Recompile(const std::filesystem::path& headerFilePath)
             defined.clear();
         }
     }
+
+    // The empty crates rust_chunk_count asks for past the last function.
+    for (size_t i = neededChunks; i < chunkCount; i++)
+        WriteChunk(i, {}, {}, {});
 
     WriteCppFallback(fallback, headerFilePath);
 

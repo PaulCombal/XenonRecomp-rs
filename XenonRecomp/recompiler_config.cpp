@@ -19,6 +19,7 @@ void RecompilerConfig::Load(const std::string_view& configFilePath)
         switchTableFilePath = main["switch_table_file_path"].value_or<std::string>("");
         backend = main["backend"].value_or<std::string>("cpp");
         rustHooksFilePath = main["rust_hooks_file_path"].value_or<std::string>("");
+        rustChunkCount = main["rust_chunk_count"].value_or(0u);
 
         skipLr = main["skip_lr"].value_or(false);
         skipMsr = main["skip_msr"].value_or(false);

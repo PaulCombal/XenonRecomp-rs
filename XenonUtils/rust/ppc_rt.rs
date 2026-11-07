@@ -13,6 +13,8 @@
 #![no_std]
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![allow(unsafe_op_in_unsafe_fn, clippy::all)]
+// __m128i is a NEON register on arm64, which the lint does not know how to pass.
+#![allow(improper_ctypes)]
 
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 compile_error!("the Rust backend targets x86-64 and AArch64 only");

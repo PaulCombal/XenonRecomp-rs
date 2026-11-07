@@ -14,16 +14,24 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![allow(unsafe_op_in_unsafe_fn, clippy::all)]
 
-#[cfg(not(target_arch = "x86_64"))]
-compile_error!("the Rust backend targets x86-64 only; ppc_context.h also has an AArch64 path, which this crate does not");
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+compile_error!("the Rust backend targets x86-64 and AArch64 only");
 
 // Without these the intrinsics below are real calls, one per guest vector
 // instruction, and SSE4.1 ones may not link at all.
-#[cfg(not(all(target_feature = "ssse3", target_feature = "sse4.1")))]
+#[cfg(all(target_arch = "x86_64", not(all(target_feature = "ssse3", target_feature = "sse4.1"))))]
 compile_error!("recompiled code needs SSSE3 and SSE4.1: build with -Ctarget-cpu=x86-64-v2 (the generated .cargo/config.toml says so, for builds from that workspace)");
 
 use core::arch::asm;
+#[cfg(target_arch = "x86_64")]
 pub use core::arch::x86_64::*;
+// On arm64 the x86 intrinsics the recompiled code names are neon.rs's, in NEON.
+#[cfg(target_arch = "aarch64")]
+mod neon;
+#[cfg(target_arch = "aarch64")]
+pub use neon::*;
+#[cfg(target_arch = "aarch64")]
+use core::arch::aarch64::{vcvtd_s64_f64, vdup_n_f64, vget_lane_f64, vrndi_f64, vsqrt_f64};
 use core::hint::cold_path;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
@@ -131,16 +139,36 @@ pub union PPCVRegister {
 
 // ---- floating point state ----------------------------------------------------
 
+#[cfg(target_arch = "x86_64")]
 const ROUND_MASK: u32 = 0x6000;
+#[cfg(target_arch = "x86_64")]
 const ROUND_SHIFT: u32 = 13;
+#[cfg(target_arch = "x86_64")]
 const FLUSH_MASK: u32 = 0x8000 | 0x0040; // FTZ and DAZ
+#[cfg(target_arch = "x86_64")]
 const GUEST_TO_HOST: [u32; 4] = [0x0000, 0x6000, 0x4000, 0x2000];
+#[cfg(target_arch = "x86_64")]
 const HOST_TO_GUEST: [u32; 4] = [0, 3, 2, 1];
+
+// On arm64 the same state is FPCR: RMode in bits 23:22 (0 nearest, 1 up, 2 down,
+// 3 to zero, where the guest's rounding field is 0 nearest, 1 to zero, 2 up, 3 down)
+// and FZ in bit 24, which flushes denormal inputs and results both.
+#[cfg(target_arch = "aarch64")]
+const ROUND_MASK: u32 = 3 << 22;
+#[cfg(target_arch = "aarch64")]
+const ROUND_SHIFT: u32 = 22;
+#[cfg(target_arch = "aarch64")]
+const FLUSH_MASK: u32 = 1 << 24;
+#[cfg(target_arch = "aarch64")]
+const GUEST_TO_HOST: [u32; 4] = [0, 3 << 22, 1 << 22, 2 << 22];
+#[cfg(target_arch = "aarch64")]
+const HOST_TO_GUEST: [u32; 4] = [0, 2, 3, 1];
 
 // _mm_getcsr and _mm_setcsr are deprecated in Rust. These are the same two
 // instructions. Like clang's, nothing here stops an optimiser from moving pure
 // arithmetic across them; the emitted order is what holds in practice, and
 // ppc_context.h relies on the same.
+#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 unsafe fn getcsr() -> u32 {
     let mut csr: u32 = 0;
@@ -148,9 +176,24 @@ unsafe fn getcsr() -> u32 {
     csr
 }
 
+#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 unsafe fn setcsr(csr: u32) {
     asm!("ldmxcsr [{}]", in(reg) &raw const csr, options(nostack, preserves_flags, readonly));
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+unsafe fn getcsr() -> u32 {
+    let fpcr: u64;
+    asm!("mrs {}, fpcr", out(reg) fpcr, options(nostack, preserves_flags, nomem));
+    fpcr as u32
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+unsafe fn setcsr(csr: u32) {
+    asm!("msr fpcr, {}", in(reg) csr as u64, options(nostack, preserves_flags, nomem));
 }
 
 #[repr(C)]
@@ -230,7 +273,37 @@ pub unsafe fn ppc_lookup_func(base: *mut u8, address: u32) -> Option<PPCFunc> {
 
 #[inline(always)]
 pub unsafe fn ppc_debugtrap() {
+    #[cfg(target_arch = "x86_64")]
     asm!("int3", options(nomem, nostack));
+    #[cfg(target_arch = "aarch64")]
+    asm!("brk #0xf000", options(nomem, nostack));
+}
+
+// ---- the console's memory barriers ---------------------------------------------
+//
+// sync, lwsync and eieio. x86 keeps loads and stores in the order the program gave
+// them as closely as the title needs, so there they are nothing; arm64 does not,
+// and the title's locks, ring buffers and flags are written for a machine that
+// orders only where it is told to. (The guest's own memory accesses are volatile,
+// which the compiler leaves in order, and these are what orders them in the
+// processor.)
+
+#[inline(always)]
+pub fn ppc_sync() {
+    #[cfg(target_arch = "aarch64")]
+    core::sync::atomic::fence(Ordering::SeqCst);
+}
+
+#[inline(always)]
+pub fn ppc_lwsync() {
+    #[cfg(target_arch = "aarch64")]
+    core::sync::atomic::fence(Ordering::AcqRel);
+}
+
+#[inline(always)]
+pub fn ppc_eieio() {
+    #[cfg(target_arch = "aarch64")]
+    core::sync::atomic::fence(Ordering::Release);
 }
 
 // ---- setjmp and longjmp ------------------------------------------------------
@@ -269,7 +342,7 @@ unsafe extern "C" {
     pub fn ppc_longjmp(buffer: *mut u8, value: i32) -> !;
 }
 
-#[cfg(not(windows))]
+#[cfg(all(target_arch = "x86_64", not(windows)))]
 core::arch::global_asm!(
     ".text",
     ".globl ppc_setjmp_call",
@@ -297,7 +370,7 @@ core::arch::global_asm!(
     "jmp 2b",
 );
 
-#[cfg(windows)]
+#[cfg(all(target_arch = "x86_64", windows))]
 core::arch::global_asm!(
     ".text",
     ".globl ppc_setjmp_call",
@@ -330,6 +403,70 @@ core::arch::global_asm!(
     "call [rsp+200]",
     "jmp 2b",
 );
+
+
+// The same on arm64: the callee-saved registers (x19-x28, the frame pointer and link
+// register, d8-d15) saved on the stack, its pointer left in the jmp_buf, and the
+// function called with the argument and 0. x18 is the platform's.
+macro_rules! arm64_setjmp {
+    ($call:literal, $long:literal) => {
+        core::arch::global_asm!(
+            ".text",
+            ".p2align 2",
+            concat!(".globl ", $call),
+            concat!($call, ":"),
+            "stp x29, x30, [sp, #-16]!",
+            "stp x27, x28, [sp, #-16]!",
+            "stp x25, x26, [sp, #-16]!",
+            "stp x23, x24, [sp, #-16]!",
+            "stp x21, x22, [sp, #-16]!",
+            "stp x19, x20, [sp, #-16]!",
+            "stp d14, d15, [sp, #-16]!",
+            "stp d12, d13, [sp, #-16]!",
+            "stp d10, d11, [sp, #-16]!",
+            "stp d8, d9, [sp, #-16]!",
+            "stp x2, x1, [sp, #-16]!", // [sp] the argument, [sp+8] the function
+            "mov x3, sp",
+            "str x3, [x0]",
+            "mov x0, x2",
+            "mov w2, wzr",
+            "mov w1, wzr",
+            "ldr x3, [sp, #8]",
+            "blr x3",
+            "2:",
+            "add sp, sp, #16",
+            "ldp d8, d9, [sp], #16",
+            "ldp d10, d11, [sp], #16",
+            "ldp d12, d13, [sp], #16",
+            "ldp d14, d15, [sp], #16",
+            "ldp x19, x20, [sp], #16",
+            "ldp x21, x22, [sp], #16",
+            "ldp x23, x24, [sp], #16",
+            "ldp x25, x26, [sp], #16",
+            "ldp x27, x28, [sp], #16",
+            "ldp x29, x30, [sp], #16",
+            "ret",
+            ".p2align 2",
+            concat!(".globl ", $long),
+            concat!($long, ":"),
+            "ldr x2, [x0]",
+            "mov sp, x2",
+            "mov w3, #1",
+            "cmp w1, #0",
+            "csel w1, w3, w1, eq", // longjmp(buffer, 0) returns 1
+            "ldr x0, [sp]",
+            "ldr x3, [sp, #8]",
+            "blr x3",
+            "b 2b",
+        );
+    };
+}
+
+#[cfg(all(target_arch = "aarch64", target_vendor = "apple"))]
+arm64_setjmp!("_ppc_setjmp_call", "_ppc_longjmp");
+
+#[cfg(all(target_arch = "aarch64", not(target_vendor = "apple")))]
+arm64_setjmp!("ppc_setjmp_call", "ppc_longjmp");
 
 /// `*env = *ctx`, then stops the body at this setjmp. The body returns next.
 #[inline(always)]
@@ -436,7 +573,11 @@ macro_rules! guest_store {
         pub unsafe fn $name(base: *mut u8, address: u32, value: $t) {
             #[cfg(not(debug_assertions))]
             (guest(base, address) as *mut $t).write_volatile(value.swap_bytes());
-            #[cfg(debug_assertions)]
+            // arm64 stores unaligned as it loads, so the wrapper that makes the write
+            // defined costs nothing there.
+            #[cfg(all(debug_assertions, target_arch = "aarch64"))]
+            (guest(base, address) as *mut Unaligned<$t>).write_volatile(Unaligned(value.swap_bytes()));
+            #[cfg(all(debug_assertions, target_arch = "x86_64"))]
             asm!(
                 concat!("mov ", $size, " ptr [{}+{}], {:", $register, "}"),
                 in(reg) base,
@@ -532,25 +673,81 @@ pub fn sat_s32(v: i64) -> i32 {
 
 // ---- floating point helpers --------------------------------------------------
 
+#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 pub unsafe fn fsqrt(x: f64) -> f64 {
     let v = _mm_set_sd(x);
     _mm_cvtsd_f64(_mm_sqrt_sd(v, v))
 }
 
+#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 pub unsafe fn fctid(x: f64) -> i64 {
     if x > i64::MAX as f64 { i64::MAX } else { _mm_cvtsd_si64(_mm_set_sd(x)) }
 }
 
+#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 pub unsafe fn fctidz(x: f64) -> i64 {
     if x > i64::MAX as f64 { i64::MAX } else { _mm_cvttsd_si64(_mm_set_sd(x)) }
 }
 
+#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 pub unsafe fn fctiwz(x: f64) -> i64 {
     if x > i32::MAX as f64 { i32::MAX as i64 } else { _mm_cvttsd_si32(_mm_set_sd(x)) as i64 }
+}
+
+// On arm64 the conversions saturate and give 0 for a NaN, where cvtsd2si gives the
+// integer indefinite (the type's minimum) for a NaN and for a value too far below;
+// the guest expects x86's.
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+pub unsafe fn fsqrt(x: f64) -> f64 {
+    vget_lane_f64::<0>(vsqrt_f64(vdup_n_f64(x)))
+}
+
+// The current rounding mode (FPCR's), then the conversion.
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+pub unsafe fn fctid(x: f64) -> i64 {
+    if x != x {
+        i64::MIN
+    } else if x > i64::MAX as f64 {
+        i64::MAX
+    } else if x == i64::MAX as f64 {
+        i64::MIN // 2^63, which cvtsd2si cannot hold
+    } else {
+        vcvtd_s64_f64(vget_lane_f64::<0>(vrndi_f64(vdup_n_f64(x))))
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+pub unsafe fn fctidz(x: f64) -> i64 {
+    if x != x {
+        i64::MIN
+    } else if x > i64::MAX as f64 {
+        i64::MAX
+    } else if x == i64::MAX as f64 {
+        i64::MIN
+    } else {
+        vcvtd_s64_f64(x)
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+pub unsafe fn fctiwz(x: f64) -> i64 {
+    if x != x {
+        i32::MIN as i64
+    } else if x > i32::MAX as f64 {
+        i32::MAX as i64
+    } else if x < i32::MIN as f64 {
+        i32::MIN as i64
+    } else {
+        x as i32 as i64
+    }
 }
 
 // ---- vector memory -----------------------------------------------------------

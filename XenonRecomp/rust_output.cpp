@@ -102,6 +102,10 @@ void RustRecompiler::WriteRuntimeCrate(const std::filesystem::path& headerFilePa
     out = ReadFile(runtimeDirectory / "ppc_rt.rs");
     SaveCurrentOutData("ppc_rt/src/lib.rs");
 
+    // The x86 intrinsics in NEON, which lib.rs includes on arm64.
+    out = ReadFile(runtimeDirectory / "neon.rs");
+    SaveCurrentOutData("ppc_rt/src/neon.rs");
+
     out = ReadFile(hooksFilePath.empty() ? runtimeDirectory / "hooks.rs" : std::filesystem::path(config.directoryPath) / hooksFilePath);
     SaveCurrentOutData("ppc_rt/src/hooks.rs");
 
@@ -184,7 +188,7 @@ void RustRecompiler::WriteWorkspace(size_t chunkCount, const std::filesystem::pa
     println("panic = \"abort\"");
     SaveCurrentOutData("Cargo.toml");
 
-    println("[build]");
+    println("[target.'cfg(target_arch = \"x86_64\")']");
     println("rustflags = [\"-Ctarget-cpu=x86-64-v2\"]");
     SaveCurrentOutData(".cargo/config.toml");
 

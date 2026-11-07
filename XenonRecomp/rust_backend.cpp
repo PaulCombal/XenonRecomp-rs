@@ -595,7 +595,7 @@ bool RustRecompiler::Emit(
         break;
 
     case PPC_INST_EIEIO:
-        // no op
+        println("\tppc_eieio();");
         break;
 
     case PPC_INST_EXTSB:
@@ -886,7 +886,7 @@ bool RustRecompiler::Emit(
         break;
 
     case PPC_INST_LWSYNC:
-        // no op
+        println("\tppc_lwsync();");
         break;
 
     case PPC_INST_LWZ:
@@ -1299,6 +1299,9 @@ bool RustRecompiler::Emit(
         break;
 
     case PPC_INST_SYNC:
+        println("\tppc_sync();");
+        break;
+
     case PPC_INST_TDLGEI:
     case PPC_INST_TDLLEI:
     case PPC_INST_TWI:

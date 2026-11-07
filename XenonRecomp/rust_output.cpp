@@ -102,6 +102,10 @@ void RustRecompiler::WriteRuntimeCrate(const std::filesystem::path& headerFilePa
     out = ReadFile(runtimeDirectory / "ppc_rt.rs");
     SaveCurrentOutData("ppc_rt/src/lib.rs");
 
+    // The x86 intrinsics in NEON, which lib.rs includes on arm64.
+    out = ReadFile(runtimeDirectory / "neon.rs");
+    SaveCurrentOutData("ppc_rt/src/neon.rs");
+
     out = ReadFile(hooksFilePath.empty() ? runtimeDirectory / "hooks.rs" : std::filesystem::path(config.directoryPath) / hooksFilePath);
     SaveCurrentOutData("ppc_rt/src/hooks.rs");
 
@@ -148,11 +152,29 @@ void RustRecompiler::WriteChunk(size_t index, const std::string& code, const std
     // __imp__sub_X. rustc has no stable way to say either, the assembler does.
     if (!defined.empty())
     {
+        println("#[cfg(not(target_vendor = \"apple\"))]");
         println("core::arch::global_asm!(");
         for (const std::string& name : defined)
         {
             println("\t\".weak {}\",", name);
             println("\t\".set {0}, __imp__{0}\",", name);
+        }
+        println(");\n");
+
+        // Mach-O has no weak alias (the assembler drops the weak flag of a symbol set
+        // to another), so there sub_X is a weak definition of its own that jumps to
+        // __imp__sub_X. Symbols there carry a leading underscore. A hook's strong
+        // sub_X replaces it all the same, and the jump costs a direct branch.
+        println("#[cfg(all(target_vendor = \"apple\", target_arch = \"aarch64\"))]");
+        println("core::arch::global_asm!(");
+        println("\t\".text\",");
+        println("\t\".p2align 2\",");
+        for (const std::string& name : defined)
+        {
+            println("\t\".globl _{}\",", name);
+            println("\t\".weak_definition _{}\",", name);
+            println("\t\"_{}:\",", name);
+            println("\t\"b ___imp__{}\",", name);
         }
         println(");\n");
     }
@@ -184,7 +206,7 @@ void RustRecompiler::WriteWorkspace(size_t chunkCount, const std::filesystem::pa
     println("panic = \"abort\"");
     SaveCurrentOutData("Cargo.toml");
 
-    println("[build]");
+    println("[target.'cfg(target_arch = \"x86_64\")']");
     println("rustflags = [\"-Ctarget-cpu=x86-64-v2\"]");
     SaveCurrentOutData(".cargo/config.toml");
 

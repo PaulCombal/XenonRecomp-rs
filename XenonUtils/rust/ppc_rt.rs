@@ -410,6 +410,7 @@ core::arch::global_asm!(
 // The same on arm64: the callee-saved registers (x19-x28, the frame pointer and link
 // register, d8-d15) saved on the stack, its pointer left in the jmp_buf, and the
 // function called with the argument and 0. x18 is the platform's.
+#[cfg(target_arch = "aarch64")]
 macro_rules! arm64_setjmp {
     ($call:literal, $long:literal) => {
         core::arch::global_asm!(

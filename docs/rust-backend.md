@@ -125,6 +125,11 @@ hook, or a `setjmp` reached other than by a plain `bl` or in a function that kee
 registers in locals. MW2 has none: the file is empty, and neither title needs a C++
 compiler for guest code.
 
+`--no-cpp-fallback` makes that a requirement. A function that would go to C++ is
+printed with its address and reason, and the generator exits with an error before
+writing anything. It is a command-line option only, and it has no effect with
+`--backend=cpp`.
+
 ## What is different from the C++ output
 
 Rust is stricter in three places, and in each the difference is only visible to

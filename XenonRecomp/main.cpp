@@ -9,6 +9,7 @@ int main(int argc, char* argv[])
     std::string outDirectory;
     std::string rustHooks;
     std::string selfTest;
+    bool noCppFallback = false;
     uint32_t seed = 1;
     while (argc > 1 && strncmp(argv[1], "--", 2) == 0)
     {
@@ -19,6 +20,8 @@ int main(int argc, char* argv[])
             outDirectory = option.substr(6);
         else if (option.rfind("--rust-hooks=", 0) == 0)
             rustHooks = option.substr(13);
+        else if (option == "--no-cpp-fallback")
+            noCppFallback = true;
         else if (option.rfind("--selftest=", 0) == 0)
             selfTest = option.substr(11);
         else if (option.rfind("--seed=", 0) == 0)
@@ -50,7 +53,7 @@ int main(int argc, char* argv[])
 #ifndef XENON_RECOMP_CONFIG_FILE_PATH
     if (argc < 3)
     {
-        printf("Usage: XenonRecomp [--backend=cpp|rust] [--out=directory] [--rust-hooks=file] [input TOML file path] [PPC context header file path]");
+        printf("Usage: XenonRecomp [--backend=cpp|rust] [--out=directory] [--rust-hooks=file] [--no-cpp-fallback] [input TOML file path] [PPC context header file path]");
         return EXIT_SUCCESS;
     }
 #endif
@@ -102,7 +105,9 @@ int main(int argc, char* argv[])
         {
             recompiler.runtimeDirectory = std::filesystem::path(headerFilePath).parent_path() / "rust";
             recompiler.hooksFilePath = recompiler.config.rustHooksFilePath;
-            recompiler.Recompile(headerFilePath);
+            recompiler.noCppFallback = noCppFallback;
+            if (!recompiler.Recompile(headerFilePath))
+                return EXIT_FAILURE;
         }
         else
         {

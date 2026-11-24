@@ -25,16 +25,20 @@ struct RustRecompiler : Recompiler
     std::filesystem::path runtimeDirectory;
     // Replaces hooks.rs, if not empty. Relative to the TOML, like its other paths.
     std::string hooksFilePath;
+    // --no-cpp-fallback: a function that would go to C++ stops the generator.
+    bool noCppFallback = false;
 
     size_t fallbackFunctions = 0;
     rustcfg::Stats structureTotals{};
 
-    void Recompile(const std::filesystem::path& headerFilePath);
+    // False, having written nothing, when noCppFallback is set and a function
+    // needs C++.
+    bool Recompile(const std::filesystem::path& headerFilePath);
 
-    // True for a function that has to go through the C++ backend: one with a
-    // mid-asm hook, or a setjmp that is not a plain call in a function that keeps
-    // its registers in the context, which no compiled title has.
-    bool NeedsCppFallback(const Function& fn) const;
+    // Why the function has to go through the C++ backend, or nullptr if it does
+    // not: a mid-asm hook, or a setjmp that is not a plain call in a function that
+    // keeps its registers in the context, which no compiled title has.
+    const char* CppFallbackReason(const Function& fn) const;
 
     // One function's Rust, added to `externs` with the symbols it calls.
     std::string RecompileFunction(const Function& fn, std::set<std::string>& externs);

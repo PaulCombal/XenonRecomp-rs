@@ -290,9 +290,32 @@ void RustRecompiler::WriteCppFallback(const std::string& code, const std::filesy
     SaveCurrentOutData("cpp/ppc_fallback.cpp");
 }
 
-void RustRecompiler::Recompile(const std::filesystem::path& headerFilePath)
+bool RustRecompiler::Recompile(const std::filesystem::path& headerFilePath)
 {
     out.reserve(10 * 1024 * 1024);
+
+    // Before anything is written, which the setjmp check needs.
+    FindRegisterFlow();
+
+    if (noCppFallback)
+    {
+        size_t refused = 0;
+        for (const Function& fn : functions)
+        {
+            if (const char* reason = CppFallbackReason(fn))
+            {
+                auto symbol = image.symbols.find(fn.base);
+                fmt::println("{} (0x{:X}) would go to C++: {}",
+                    symbol != image.symbols.end() ? symbol->name : fmt::format("sub_{:X}", fn.base), fn.base, reason);
+                refused++;
+            }
+        }
+        if (refused != 0)
+        {
+            fmt::println("--no-cpp-fallback: nothing written, functions that would go to C++: {}", refused);
+            return false;
+        }
+    }
 
     const auto root = std::filesystem::path(config.directoryPath) / config.outDirectoryPath;
     const size_t neededChunks = (functions.size() + CHUNK_SIZE - 1) / CHUNK_SIZE;
@@ -308,8 +331,6 @@ void RustRecompiler::Recompile(const std::filesystem::path& headerFilePath)
     WriteRuntimeCrate(headerFilePath);
     WriteWorkspace(chunkCount, headerFilePath);
 
-    FindRegisterFlow();
-
     std::string fallback;
     std::string code;
     std::set<std::string> externs;
@@ -322,7 +343,7 @@ void RustRecompiler::Recompile(const std::filesystem::path& headerFilePath)
 
         const Function& fn = functions[i];
 
-        if (NeedsCppFallback(fn))
+        if (CppFallbackReason(fn))
         {
             std::swap(out, fallback);
             Recompiler::Recompile(fn);
@@ -354,4 +375,5 @@ void RustRecompiler::Recompile(const std::filesystem::path& headerFilePath)
     fmt::println("Rust backend: {} functions in {} crates, {} in C++ ({} irreducible regions, {} edges through a dispatcher, nesting depth {})",
         functions.size() - fallbackFunctions, chunkCount, fallbackFunctions,
         structureTotals.irreducibleRegions, structureTotals.dispatchEdges, structureTotals.maxDepth);
+    return true;
 }

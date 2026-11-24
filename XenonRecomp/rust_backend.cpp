@@ -14,7 +14,7 @@
 //   and stored through a pointer to its bytes.
 // - An instruction that branches says so through `flow` and ends the block.
 
-bool RustRecompiler::NeedsCppFallback(const Function& fn) const
+const char* RustRecompiler::CppFallbackReason(const Function& fn) const
 {
     const auto* data = static_cast<const uint32_t*>(image.Find(fn.base));
     bool callsSetjmp = false;
@@ -22,7 +22,7 @@ bool RustRecompiler::NeedsCppFallback(const Function& fn) const
     for (size_t address = fn.base; address < fn.base + fn.size; address += 4)
     {
         if (config.midAsmHooks.find(uint32_t(address)) != config.midAsmHooks.end())
-            return true;
+            return "a mid-asm hook";
 
         const uint32_t instruction = ByteSwap(data[(address - fn.base) / 4]);
         const size_t op = PPC_OP(instruction);
@@ -36,7 +36,7 @@ bool RustRecompiler::NeedsCppFallback(const Function& fn) const
         {
             // Only a plain bl has somewhere to continue.
             if (op != PPC_OP_B || !PPC_BL(instruction))
-                return true;
+                return "a branch to setjmp that is not a bl";
             callsSetjmp = true;
         }
     }
@@ -45,10 +45,11 @@ bool RustRecompiler::NeedsCppFallback(const Function& fn) const
     {
         const bool anyLocals = config.ctrAsLocalVariable || config.xerAsLocalVariable || config.reservedRegisterAsLocalVariable ||
             config.crRegistersAsLocalVariables || config.nonArgumentRegistersAsLocalVariables || config.nonVolatileRegistersAsLocalVariables;
-        return anyLocals && functionsKeepingRegistersInContext.count(fn.base) == 0;
+        if (anyLocals && functionsKeepingRegistersInContext.count(fn.base) == 0)
+            return "a setjmp in a function that keeps registers in locals";
     }
 
-    return false;
+    return nullptr;
 }
 
 bool RustRecompiler::Emit(

@@ -206,7 +206,7 @@ void RustRecompiler::WriteWorkspace(size_t chunkCount, const std::filesystem::pa
     println("panic = \"abort\"");
     SaveCurrentOutData("Cargo.toml");
 
-    println("[target.'cfg(target_arch = \"x86_64\")']");
+    println("[build]");
     println("rustflags = [\"-Ctarget-cpu=x86-64-v2\"]");
     SaveCurrentOutData(".cargo/config.toml");
 

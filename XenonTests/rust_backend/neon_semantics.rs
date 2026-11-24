@@ -252,7 +252,7 @@ fn shifts() {
                 binary_i(concat!("srli64::", $n), |a, _| _mm_srli_epi64::<$n>(a), |a, _| from_u64(u64s(a).map(|x| if $n > 63 { 0 } else { x >> $n })));
             )*};
         }
-        shifts!(0, 1, 3, 8, 23, 31, 32, 33, 61, 63, 64, 70);
+        shifts!(0, 1, 3, 8, 23, 31, 32, 33, 61, 63, 64, 70, 127, 128, 200, 255);
         binary_i(
             "srl64",
             |a, c| _mm_srl_epi64(a, c),

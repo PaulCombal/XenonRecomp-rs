@@ -453,15 +453,16 @@ pub unsafe fn _mm_cmpgt_epi16(a: __m128i, b: __m128i) -> __m128i {
 // A variable shift (ushl, sshl) takes its count from the low byte of each lane,
 // signed, and a count of the lane's width or more gives 0 (or, right-shifting a
 // signed lane, its sign): x86's rule for the immediate forms too. The counts here
-// are at most 255, so the low byte holds them.
+// are clamped to the lane's width first: the low byte is read signed, so a count
+// of 128 or more would otherwise shift the other way.
 
 #[inline(always)]
 pub unsafe fn _mm_slli_epi32<const N: i32>(a: __m128i) -> __m128i {
-    from_u32(vshlq_u32(u32x(a), vdupq_n_s32(N.min(255))))
+    from_u32(vshlq_u32(u32x(a), vdupq_n_s32(N.min(32))))
 }
 #[inline(always)]
 pub unsafe fn _mm_srli_epi32<const N: i32>(a: __m128i) -> __m128i {
-    from_u32(vshlq_u32(u32x(a), vdupq_n_s32(-N.min(255))))
+    from_u32(vshlq_u32(u32x(a), vdupq_n_s32(-N.min(32))))
 }
 #[inline(always)]
 pub unsafe fn _mm_srai_epi32<const N: i32>(a: __m128i) -> __m128i {
@@ -469,11 +470,11 @@ pub unsafe fn _mm_srai_epi32<const N: i32>(a: __m128i) -> __m128i {
 }
 #[inline(always)]
 pub unsafe fn _mm_slli_epi64<const N: i32>(a: __m128i) -> __m128i {
-    from_u64(vshlq_u64(u64x(a), vdupq_n_s64(N.min(255) as i64)))
+    from_u64(vshlq_u64(u64x(a), vdupq_n_s64(N.min(64) as i64)))
 }
 #[inline(always)]
 pub unsafe fn _mm_srli_epi64<const N: i32>(a: __m128i) -> __m128i {
-    from_u64(vshlq_u64(u64x(a), vdupq_n_s64(-(N.min(255) as i64))))
+    from_u64(vshlq_u64(u64x(a), vdupq_n_s64(-(N.min(64) as i64))))
 }
 
 /// A logical right shift of both 64-bit lanes by the low 64 bits of `count`.

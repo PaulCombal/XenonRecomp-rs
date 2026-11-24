@@ -35,10 +35,13 @@ fn main() {
     let cxx = env::var("CXX").unwrap_or_else(|_| "clang++".to_string());
     let ar = env::var("AR").unwrap_or_else(|_| "ar".to_string());
 
-    // simde makes the x86 intrinsics of ppc_context.h out of NEON on arm64.
-    let arch = if env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("x86_64") { "-march=x86-64-v2" } else { "-O3" };
-    run(Command::new(cxx)
-        .args(["-std=c++20", "-O3", arch, "-w", "-fno-exceptions", "-fno-rtti", "-c"])
+    let mut cxx = Command::new(cxx);
+    cxx.args(["-std=c++20", "-O3", "-w", "-fno-exceptions", "-fno-rtti", "-c"]);
+    // On arm64 simde makes the x86 intrinsics of ppc_context.h out of NEON.
+    if env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("x86_64") {
+        cxx.arg("-march=x86-64-v2");
+    }
+    run(cxx
         .arg("-I../cpp/include")
         .arg(format!("-I{simde}"))
         .arg("../cpp/ppc_fallback.cpp")

@@ -12,8 +12,8 @@ the same `PPCContext` and the same calling convention.
 
 Both options can also be set in the TOML, as `backend = "rust"` and
 `rust_hooks_file_path`. `XenonUtils/rust/` must stay beside `ppc_context.h`, the
-generator reads the runtime crate from there. The output is x86-64 only, and
-`rust-toolchain.toml` pins it to Rust 1.97.1, the version it was tested with. Run
+generator reads the runtime crate from there. The output builds for x86-64 and
+for arm64 (see [arm64](#arm64)), and `rust-toolchain.toml` pins it to Rust 1.97.1, the version it was tested with. Run
 `XenonTests/rust_backend/union_locals.rs` on any other before moving the pin
 (`rust_output.cpp`), because of [the rustc bug](#the-rustc-bug).
 
@@ -21,7 +21,7 @@ generator reads the runtime crate from there. The output is x86-64 only, and
 
 | path | what |
 |---|---|
-| `Cargo.toml`, `.cargo/config.toml`, `rust-toolchain.toml` | the workspace: `panic = "abort"`, `-Ctarget-cpu=x86-64-v2`, the compiler version |
+| `Cargo.toml`, `.cargo/config.toml`, `rust-toolchain.toml` | the workspace: `panic = "abort"`, `-Ctarget-cpu=x86-64-v2` (see below), the compiler version |
 | `ppc_rt/` | the types and helpers, the counterpart of `ppc_context.h` (`XenonUtils/rust/ppc_rt.rs`), the title's constants and context (`context.rs`), and `hooks.rs` |
 | `chunks/cNNN/` | 256 functions each, a crate each |
 | `ppc_recomp/` | links the chunks as an rlib and a staticlib, and holds `PPCFuncMappings` |
@@ -42,6 +42,11 @@ target CPU (`ppc_rt` stops the build with a message otherwise, because without
 SSSE3 and SSE4.1 every vector instruction would be a function call), and
 `panic = "abort"`.
 
+`-Ctarget-cpu=x86-64-v2` is in `[build] rustflags`, so it joins the `build.rustflags`
+of any config file above the workspace. On arm64 it means nothing: rustc warns that
+the processor is not recognised and ignores it. `CARGO_BUILD_RUSTFLAGS=` (empty)
+silences that.
+
 ## Using it from a runtime
 
 From Rust, depend on `ppc_recomp`. If `cpp/ppc_fallback.cpp` has any functions, its
@@ -59,7 +64,11 @@ before. Rust's static library needs `gcc_s`, `dl`, `m` and `pthread` on Linux.
 C++, and every call goes through `sub_X`. So a strong `sub_X` anywhere in the
 program, in C++ or in Rust with `#[unsafe(no_mangle)]`, replaces the function, and
 can still call `__imp__sub_X`. Rust has no stable weak linkage, but its assembler
-does: each chunk has a `global_asm!` of `.weak` and `.set` lines.
+does: each chunk has a `global_asm!` of `.weak` and `.set` lines. Mach-O has no
+weak alias (its assembler drops the weak flag of a symbol set to another), so on
+arm64 macOS `sub_X` is a weak definition of its own that branches to
+`__imp__sub_X`, which a strong `sub_X` replaces all the same. x86-64 macOS has
+neither, and `ppc_rt` stops its build.
 
 A hook written in Rust must not panic across guest frames, and may be skipped by a
 `longjmp`, so nothing in it can rely on a destructor while it calls guest code. That
@@ -180,15 +189,35 @@ uses, and says when the named constant stops being miscompiled.
 - Cross-language LTO needs rustc and clang on the same LLVM. ThinLTO among the Rust
   crates alone builds, and changes little: calls go through weak symbols, which
   stops inlining across functions. PGO has not been tried on the guest code.
+- See [arm64](#arm64) for what changes there.
 - Windows is `x86_64-pc-windows-gnullvm`, linked with llvm-mingw. A chunk compiles
   for it, and weak hooks and the setjmp trampoline work there (run under Wine); no
   whole game has been built.
+
+## arm64
+
+The generated code names x86 intrinsics. On arm64 `ppc_rt` takes them from
+`XenonUtils/rust/neon.rs` instead of `core::arch::x86_64`: the same names and
+lanes, written in NEON, with x86's result kept wherever the two differ (`minps`
+and `maxps` on a NaN or a pair of zeros, `cvttps2dq` out of range, shifts by the
+width or more). The C++ side, `ppc_fallback.cpp`, gets them from simde.
+
+- The rounding and flush state is FPCR's `RMode` and `FZ` where x86 has MXCSR's.
+- `fctid`, `fctidz` and `fctiwz` give x86's result for a NaN and out of range, where
+  arm64's conversions saturate.
+- `sync`, `lwsync` and `eieio` are `ppc_sync`, `ppc_lwsync` and `ppc_eieio`: a
+  fence on arm64, nothing on x86.
+- `ppc_setjmp_call` and `ppc_longjmp` have an AArch64 version, for Mach-O and ELF.
+
+This path is the contributor's, and has not been played on this side.
 
 ## Testing
 
 `XenonTests/rust_backend/`:
 
 - `union_locals.rs`, for the bug above.
+- `neon_semantics.rs`, on arm64 only: `neon.rs` against a lane-by-lane model of the
+  x86 manuals. `run.sh` runs it first on an arm64 host.
 - `run.sh`: `XenonRecomp --selftest` writes a synthetic image through both backends,
   with every form of every handled instruction with random operands, and random
   control flow graphs with jump tables and multi-entry loops, and the two programs
@@ -196,9 +225,11 @@ uses, and says when the named constant stops being miscompiled.
   fault), and `setjmp` programs: there and back, from a callee, around a loop, with
   two buffers. `coverage.py` lists any case of `rust_backend.cpp` that was not reached.
   Atomics run on one thread here: what they do under contention is the game's test.
+  It runs on x86-64 and arm64 hosts (macOS needs `timeout` from coreutils, and `CXX`
+  set to its clang++).
 - `title_fuzz.py`: every function of a real title, one chunk at a time, in the
   configuration it really has. Registers in locals is what `run.sh` cannot see, as
-  it keeps everything in the context to compare it.
+  it keeps everything in the context to compare it. x86-64 only.
 
 For a title that misbehaves, the two backends can be mixed in one program: link the
 C++ objects of some chunks before `libppc_recomp.a`, with

@@ -13,11 +13,18 @@
 #![no_std]
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 #![allow(unsafe_op_in_unsafe_fn, clippy::all)]
-// __m128i is a NEON register on arm64, which the lint does not know how to pass.
+// The lint calls __m128i not FFI-safe in extern blocks, on x86-64 as on arm64
+// (where it is neon.rs's wrapper of a NEON register). Both sides agree on it.
 #![allow(improper_ctypes)]
 
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 compile_error!("the Rust backend targets x86-64 and AArch64 only");
+
+// Mach-O has no weak alias, and the generated chunks give sub_X its weak definition
+// there for arm64 only (rust_output.cpp), so on an Intel Mac every sub_X would be
+// undefined at link time.
+#[cfg(all(target_vendor = "apple", target_arch = "x86_64"))]
+compile_error!("the Rust backend does not target x86-64 macOS; on a Mac, build for aarch64-apple-darwin");
 
 // Without these the intrinsics below are real calls, one per guest vector
 // instruction, and SSE4.1 ones may not link at all.

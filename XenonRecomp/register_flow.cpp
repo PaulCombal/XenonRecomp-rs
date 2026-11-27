@@ -1593,3 +1593,51 @@ std::unordered_set<size_t> FindFunctionsKeepingRegistersInContext(const Recompil
 
     return result;
 }
+
+std::unordered_set<size_t> FindFunctionsNeedingReturnAddress(const Recompiler& recompiler, const std::unordered_set<size_t>& readers)
+{
+    std::unordered_map<size_t, uint32_t> indices;
+    for (size_t i = 0; i < recompiler.functions.size(); i++)
+        indices.emplace(recompiler.functions[i].base, uint32_t(i));
+
+    std::vector<FunctionFlow> functions;
+    functions.reserve(recompiler.functions.size());
+    bool writesSummaryOverflow = false;
+    for (auto& function : recompiler.functions)
+        functions.push_back(Build(recompiler, function, indices, writesSummaryOverflow));
+
+    std::vector<bool> needs(functions.size());
+    for (size_t f = 0; f < functions.size(); f++)
+        needs[f] = readers.count(functions[f].base) != 0;
+
+    bool changed = true;
+    while (changed)
+    {
+        changed = false;
+        for (size_t f = 0; f < functions.size(); f++)
+        {
+            if (needs[f])
+                continue;
+            for (const auto& insn : functions[f].instructions)
+            {
+                const bool tail = insn.flow == Flow::TailCall || insn.flow == Flow::CondTailCall;
+                const bool indirectTail = insn.flow == Flow::IndirectTailCall || insn.flow == Flow::CondIndirectTailCall;
+                if (indirectTail || (tail && (insn.target == NONE || needs[insn.target])))
+                {
+                    needs[f] = true;
+                    changed = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    std::unordered_set<size_t> result;
+    for (size_t f = 0; f < functions.size(); f++)
+    {
+        if (needs[f])
+            result.emplace(functions[f].base);
+    }
+    fmt::println("The return address is set for calls to {} of {} functions ({} read it)", result.size(), functions.size(), readers.size());
+    return result;
+}

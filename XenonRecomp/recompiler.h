@@ -41,6 +41,14 @@ struct Recompiler
     // being recompiled is one of them.
     std::unordered_set<size_t> functionsKeepingRegistersInContext;
     bool keepRegistersInContext = false;
+    // --minimal-lr: the functions that read the return address (hooks, from the
+    // file the option names), and the ones that pass theirs on to one through
+    // tail calls (register_flow.cpp). A call to any other recompiled function
+    // leaves ctx.lr as it is.
+    bool minimalLr = false;
+    std::unordered_set<size_t> lrReaders;
+    std::unordered_set<size_t> functionsNeedingLr;
+    bool CallNeedsLr(uint32_t target) const;
 
     bool LoadConfig(const std::string_view& configFilePath);
 

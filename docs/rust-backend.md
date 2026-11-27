@@ -130,6 +130,28 @@ printed with its address and reason, and the generator exits with an error befor
 writing anything. It is a command-line option only, and it has no effect with
 `--backend=cpp`.
 
+## The return address
+
+Every call writes the return address to `ctx.lr`, a store per call, though a
+recompiled function returns by returning and needs none of it. What reads it is a
+hook that asks who called it, the runtime's imports, and anything that walks the
+guest's stack frames.
+
+`--minimal-lr=<file>` keeps the store only where something can read it. The file
+lists the functions that read it, one hexadecimal address a line: a title's hooks.
+A call writes `ctx.lr` when its target is one of them, an import, or a function that
+passes the return address it was given on to one of those, or to an indirect call,
+through tail calls (`register_flow.cpp`). Indirect calls always write it. A function's
+own `mflr`/`mtlr` pair still saves and restores whatever `ctx.lr` holds, which is
+only ever read back to return.
+
+It applies to both backends. In MW2 it leaves 8,900 of the 64,000 stores, and the
+guest threads run about 3% fewer cycles. A stack walk sees stale return addresses,
+so a build that walks guest frames, for a profile or a crash report, leaves the
+option out. So must a list that misses a hook: the hook then reads its caller's
+caller, or older. Generating the list from the same source the hooks are built from
+avoids that.
+
 ## What is different from the C++ output
 
 Rust is stricter in three places, and in each the difference is only visible to

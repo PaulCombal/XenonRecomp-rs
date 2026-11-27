@@ -461,7 +461,7 @@ bool RustRecompiler::Emit(
         break;
 
     case PPC_INST_BL:
-        if (!config.skipLr)
+        if (!config.skipLr && CallNeedsLr(insn.operands[0]))
             println("\tctx.lr = 0x{:X};", base + 4);
         printFunctionCall(insn.operands[0]);
         csrState = CSRState::Unknown; // the call could change it

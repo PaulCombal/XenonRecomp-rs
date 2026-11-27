@@ -703,7 +703,7 @@ bool Recompiler::Recompile(
         break;
 
     case PPC_INST_BL:
-        if (!config.skipLr)
+        if (!config.skipLr && CallNeedsLr(insn.operands[0]))
             println("\tctx.lr = 0x{:X};", base + 4);
         printFunctionCall(insn.operands[0]);
         csrState = CSRState::Unknown; // the call could change it
@@ -2837,6 +2837,20 @@ void Recompiler::FindRegisterFlow()
     {
         functionsKeepingRegistersInContext = FindFunctionsKeepingRegistersInContext(*this);
     }
+    if (minimalLr)
+        functionsNeedingLr = FindFunctionsNeedingReturnAddress(*this, lrReaders);
+}
+
+bool Recompiler::CallNeedsLr(uint32_t target) const
+{
+    if (!minimalLr || target == config.setJmpAddress || target == config.longJmpAddress)
+        return true;
+    // An import is the runtime's, which may read it.
+    auto function = std::lower_bound(functions.begin(), functions.end(), target,
+        [](const Function& fn, uint32_t address) { return fn.base < address; });
+    if (function == functions.end() || function->base != target)
+        return true;
+    return functionsNeedingLr.count(target) != 0;
 }
 
 void Recompiler::Recompile(const std::filesystem::path& headerFilePath)

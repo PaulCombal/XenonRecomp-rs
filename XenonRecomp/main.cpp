@@ -10,6 +10,7 @@ int main(int argc, char* argv[])
     std::string rustHooks;
     std::string selfTest;
     bool noCppFallback = false;
+    std::string minimalLr;
     uint32_t seed = 1;
     while (argc > 1 && strncmp(argv[1], "--", 2) == 0)
     {
@@ -22,6 +23,8 @@ int main(int argc, char* argv[])
             rustHooks = option.substr(13);
         else if (option == "--no-cpp-fallback")
             noCppFallback = true;
+        else if (option.rfind("--minimal-lr=", 0) == 0)
+            minimalLr = option.substr(13);
         else if (option.rfind("--selftest=", 0) == 0)
             selfTest = option.substr(11);
         else if (option.rfind("--seed=", 0) == 0)
@@ -53,7 +56,7 @@ int main(int argc, char* argv[])
 #ifndef XENON_RECOMP_CONFIG_FILE_PATH
     if (argc < 3)
     {
-        printf("Usage: XenonRecomp [--backend=cpp|rust] [--out=directory] [--rust-hooks=file] [--no-cpp-fallback] [input TOML file path] [PPC context header file path]");
+        printf("Usage: XenonRecomp [--backend=cpp|rust] [--out=directory] [--rust-hooks=file] [--no-cpp-fallback] [--minimal-lr=file] [input TOML file path] [PPC context header file path]");
         return EXIT_SUCCESS;
     }
 #endif
@@ -78,6 +81,24 @@ int main(int argc, char* argv[])
             recompiler.config.outDirectoryPath = outDirectory;
         if (!rustHooks.empty())
             recompiler.config.rustHooksFilePath = rustHooks;
+
+        if (!minimalLr.empty())
+        {
+            // The functions that read ctx.lr, one hexadecimal address a line.
+            std::ifstream in(minimalLr);
+            if (!in)
+            {
+                fmt::println("--minimal-lr: cannot read {}", minimalLr);
+                return EXIT_FAILURE;
+            }
+            recompiler.minimalLr = true;
+            std::string line;
+            while (std::getline(in, line))
+            {
+                if (!line.empty())
+                    recompiler.lrReaders.insert(std::stoul(line, nullptr, 16));
+            }
+        }
 
         if (recompiler.config.backend != "cpp" && recompiler.config.backend != "rust")
         {
